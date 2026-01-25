@@ -1,0 +1,15 @@
+{
+  "name": "salla-mock",
+  "version": "0.1.0",
+  "description": "Local mock server for Salla APIs + webhook delivery",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.8",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  }
+}
