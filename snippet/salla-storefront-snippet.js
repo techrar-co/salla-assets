@@ -6,17 +6,17 @@
 	// Configuration
 	const CONFIG = {
 		sallaAppId: 61340169,
-		techrarIdPlaceholder: 1234567890,
 		defaultIntervals: [
-			{ unit: 'day', count: 1, labelEn: 'Daily', labelAr: 'يومياً' },
-			{ unit: 'week', count: 1, labelEn: 'Weekly', labelAr: 'أسبوعياً' },
-			{ unit: 'month', count: 1, labelEn: 'Monthly', labelAr: 'شهرياً' },
+			{ unit: 'day', count: 1, labelEn: 'Day', labelAr: 'يوم' },
+			{ unit: 'week', count: 1, labelEn: 'Week', labelAr: 'أسبوع' },
+			{ unit: 'month', count: 1, labelEn: 'Month', labelAr: 'شهر' },
 		],
 		supportedProducts: [],
 		cssClasses: {
 			container: 'techrar-recurring-container',
 			toggle: 'techrar-recurring-toggle',
 			dropdown: 'techrar-recurring-dropdown',
+			count: 'techrar-recurring-count',
 			label: 'techrar-recurring-label',
 			overlay: 'techrar-recurring-overlay',
 			loading: 'techrar-recurring-loading',
@@ -34,14 +34,21 @@
 
 	// Localized copy used for both runtime translation registration and fallbacks.
 	const I18N = {
-		'techrar.daily': { ar: 'يومياً', en: 'Daily' },
-		'techrar.weekly': { ar: 'أسبوعياً', en: 'Weekly' },
-		'techrar.monthly': { ar: 'شهرياً', en: 'Monthly' },
+		'techrar.day': { ar: 'يوم', en: 'Day' },
+		'techrar.week': { ar: 'أسبوع', en: 'Week' },
+		'techrar.month': { ar: 'شهر', en: 'Month' },
 		'techrar.subscribe_label': {
 			ar: 'اشترك واحصل على المنتجات بشكل متكرر',
 			en: 'Subscribe for recurring delivery',
 		},
-		'techrar.select_frequency': { ar: 'اختر الفترة', en: 'Select frequency' },
+		'techrar.select_unit': {
+			ar: 'اختر الوحدة',
+			en: 'Select unit',
+		},
+		'techrar.select_count': {
+			ar: 'أدخل العدد',
+			en: 'Enter count',
+		},
 		'techrar.options_required': {
 			ar: 'يرجى اختيار جميع الخيارات المطلوبة قبل تفعيل الاشتراك',
 			en: 'Please select all required options before enabling recurring',
@@ -61,10 +68,10 @@
 	};
 
 	// Default interval selection when enabling recurring with no selection.
-	const DEFAULT_INTERVAL = 'week:1';
+	const DEFAULT_UNIT = 'week';
+	const DEFAULT_COUNT = 1;
 	// Stable ordering helper for deterministic signatures.
-	const compareById = (a, b) =>
-		String(a.id).localeCompare(String(b.id));
+	const compareById = (a, b) => String(a.id).localeCompare(String(b.id));
 
 	let currentLang = 'ar';
 	let themeColors = {
@@ -243,7 +250,6 @@
 				(cls) => !cls.startsWith('hydrated'),
 			);
 			themeStyles.selectClasses = classes.join(' ');
-
 		}
 
 		return themeStyles;
@@ -335,27 +341,34 @@
             }
             
             /* Dropdown - full fallback styles, but theme classes can override */
-            .${CONFIG.cssClasses.dropdown} {
-                width: 100%;
-                font-family: var(--font-main, inherit);
-                font-size: inherit;
-	                color: var(--main-text-color, inherit);
-	                box-sizing: border-box;
-            }
+	            .${CONFIG.cssClasses.dropdown},
+	            .${CONFIG.cssClasses.count} {
+	                width: 100%;
+	                font-family: var(--font-main, inherit);
+	                font-size: inherit;
+		                color: var(--main-text-color, inherit);
+		                box-sizing: border-box;
+	            }
 
-            /* Dropdown focus state */
-            .${CONFIG.cssClasses.dropdown}:focus {
-                outline: none;
-                border-color: var(--color-primary, ${primaryColor});
-                box-shadow: 0 0 0 0.2rem ${primaryShadow};
-            }
-            
-            /* Dropdown disabled state */
-            .${CONFIG.cssClasses.dropdown}:disabled {
-                background: #e9ecef;
-                opacity: 0.6;
-                cursor: not-allowed;
-            }
+	            .${CONFIG.cssClasses.count} {
+					margin-top: 8px;
+	            }
+
+	            /* Dropdown focus state */
+	            .${CONFIG.cssClasses.dropdown}:focus,
+	            .${CONFIG.cssClasses.count}:focus {
+	                outline: none;
+	                border-color: var(--color-primary, ${primaryColor});
+	                box-shadow: 0 0 0 0.2rem ${primaryShadow};
+	            }
+	            
+	            /* Dropdown disabled state */
+	            .${CONFIG.cssClasses.dropdown}:disabled,
+	            .${CONFIG.cssClasses.count}:disabled {
+	                background: #e9ecef;
+	                opacity: 0.6;
+	                cursor: not-allowed;
+	            }
 
 			.${CONFIG.cssClasses.overlay} {
 				position: absolute;
@@ -444,7 +457,9 @@
 
 	// Build the overlay wrapper used for both the placeholder and the UI.
 	function overlayMarkup() {
-		return `<div class="${CONFIG.cssClasses.overlay}" aria-hidden="true">${spinnerMarkup()}</div>`;
+		return `<div class="${
+			CONFIG.cssClasses.overlay
+		}" aria-hidden="true">${spinnerMarkup()}</div>`;
 	}
 
 	// Create a lightweight container that only shows a spinner.
@@ -548,41 +563,57 @@
 		// Detect theme styles from existing form elements.
 		const themeStyles = detectThemeStyles();
 
-		// Localized labels for the UI.
-		const labelText = t('techrar.subscribe_label');
-		const dropdownLabel = t('techrar.select_frequency');
+			// Localized labels for the UI.
+			const labelText = t('techrar.subscribe_label');
+			const dropdownLabel = t('techrar.select_unit');
+			const countPlaceholder = t('techrar.select_count');
 
-		// Build select class list - ensure base theme class is present
-		const baseSelectClasses = `${CONFIG.cssClasses.dropdown} s-form-control`;
-		const selectClasses = themeStyles.selectClasses
-			? `${baseSelectClasses} ${themeStyles.selectClasses}`
-			: baseSelectClasses;
+			// Build form control class lists for both unit dropdown and count input.
+			const baseFieldClass = 's-form-control';
+			const themeFieldClasses = themeStyles.selectClasses
+				? ` ${themeStyles.selectClasses}`
+				: '';
+			const selectClasses = `${CONFIG.cssClasses.dropdown} ${baseFieldClass}${themeFieldClasses}`;
+			const countClasses = `${CONFIG.cssClasses.count} ${baseFieldClass}${themeFieldClasses}`;
 
-		container.innerHTML = `
-            <label class="${CONFIG.cssClasses.label}">
-                <input type="checkbox" class="${
-					CONFIG.cssClasses.toggle
-				}" id="recurring-toggle-cart">
-                <span>${labelText}</span>
-            </label>
-            <select class="${selectClasses}" id="recurring-interval-cart" disabled>
-                <option value="">${dropdownLabel}</option>
-                ${CONFIG.defaultIntervals
-					.map(
-						(interval) => `
-                    <option value="${interval.unit}:${interval.count}">
-							${getIntervalLabel(interval)}
-                    </option>
-                `,
-					)
-					.join('')}
-            </select>
-			${overlayMarkup()}
-        `;
+			container.innerHTML = `
+	            <label class="${CONFIG.cssClasses.label}">
+	                <input type="checkbox" class="${
+						CONFIG.cssClasses.toggle
+					}" id="recurring-toggle-cart">
+	                <span>${labelText}</span>
+	            </label>
+	            <select class="${selectClasses}" id="recurring-unit-cart" disabled>
+	                <option value="">${dropdownLabel}</option>
+	                ${CONFIG.defaultIntervals
+						.map(
+							(interval) => `
+	                    <option value="${interval.unit}">
+								${getIntervalLabel(interval)}
+	                    </option>
+	                `,
+						)
+						.join('')}
+	            </select>
+				<input
+					type="number"
+					min="1"
+					step="1"
+					inputmode="numeric"
+					pattern="[0-9]*"
+					class="${countClasses}"
+					id="recurring-count-cart"
+					placeholder="${countPlaceholder}"
+					value="${DEFAULT_COUNT}"
+					disabled
+				>
+				${overlayMarkup()}
+	        `;
 
-		// Event listeners
-		const toggle = container.querySelector('#recurring-toggle-cart');
-		const dropdown = container.querySelector('#recurring-interval-cart');
+			// Event listeners
+			const toggle = container.querySelector('#recurring-toggle-cart');
+			const dropdown = container.querySelector('#recurring-unit-cart');
+			const countInput = container.querySelector('#recurring-count-cart');
 
 		// Toggle loading overlay while async updates are running.
 		const setLoading = (isLoading) => {
@@ -593,7 +624,9 @@
 		// Localized messages for toasts/logs.
 		const optionsRequiredMessage = t('techrar.options_required');
 		const recurringEnableErrorMessage = t('techrar.recurring_enable_error');
-		const recurringDisableErrorMessage = t('techrar.recurring_disable_error');
+		const recurringDisableErrorMessage = t(
+			'techrar.recurring_disable_error',
+		);
 		const recurringResetMessage = t('techrar.recurring_reset_notice');
 
 		// Action token prevents stale async responses from updating UI state.
@@ -677,10 +710,32 @@
 			return { ready: true, optionsByItemId };
 		};
 
-		const setToggleState = (enabled) => {
-			toggle.checked = enabled;
-			dropdown.disabled = !enabled;
-		};
+			const setToggleState = (enabled) => {
+				toggle.checked = enabled;
+				dropdown.disabled = !enabled;
+				countInput.disabled = !enabled;
+			};
+
+			const parseCount = (value) => {
+				const parsed = parseInt(String(value || ''), 10);
+				if (!Number.isInteger(parsed) || parsed < 1) {
+					return null;
+				}
+				return parsed;
+			};
+
+			const ensureCountValue = () => {
+				const parsed = parseCount(countInput.value);
+				const safeCount = parsed || DEFAULT_COUNT;
+				countInput.value = String(safeCount);
+				return safeCount;
+			};
+
+			const buildIntervalValue = () => {
+				if (!dropdown.value) return '';
+				const count = ensureCountValue();
+				return `${dropdown.value}:${count}`;
+			};
 
 		const handleNotReady = (shouldRemainEnabled) => {
 			notifyError(optionsRequiredMessage, 'Options required');
@@ -781,50 +836,70 @@
 		};
 
 		// When the Checkbox is changed.
-		toggle.addEventListener('change', async (e) => {
-			const enabled = e.target.checked;
-			setToggleState(enabled);
+			toggle.addEventListener('change', async (e) => {
+				const enabled = e.target.checked;
+				setToggleState(enabled);
 
-			// If the checkbox is checked and the dropdown is empty, default to weekly.
-			if (enabled && dropdown.value === '') {
-				dropdown.value = DEFAULT_INTERVAL;
-			}
+				// If enabled with no explicit selection, default to weekly with count 1.
+				if (enabled && dropdown.value === '') {
+					dropdown.value = DEFAULT_UNIT;
+				}
+				if (enabled) {
+					ensureCountValue();
+				}
+				const intervalValue = buildIntervalValue();
 
-			// If unchecked, clear recurring from all cart items.
-			if (!enabled) {
+				// If unchecked, clear recurring from all cart items.
+				if (!enabled) {
+					await runRecurringUpdate({
+						recurring: null,
+						shouldRemainEnabled: true,
+						state: { enabled: false, interval: intervalValue },
+						errorMessage: recurringDisableErrorMessage,
+						errorLog: 'Clear recurring failed',
+						revertEnabled: true,
+					});
+					return;
+				}
+
 				await runRecurringUpdate({
-					recurring: null,
-					shouldRemainEnabled: true,
-					state: { enabled: false, interval: dropdown.value },
-					errorMessage: recurringDisableErrorMessage,
-					errorLog: 'Clear recurring failed',
-					revertEnabled: true,
+					intervalValue,
+					shouldRemainEnabled: false,
+					state: { enabled: true, interval: intervalValue },
+					errorMessage: recurringEnableErrorMessage,
+					errorLog: 'Apply recurring failed',
+					revertEnabled: false,
 				});
-				return;
-			}
-
-			await runRecurringUpdate({
-				intervalValue: dropdown.value,
-				shouldRemainEnabled: false,
-				state: { enabled: true, interval: dropdown.value },
-				errorMessage: recurringEnableErrorMessage,
-				errorLog: 'Apply recurring failed',
-				revertEnabled: false,
 			});
-		});
 
-		// When the dropdown to select an interval is changed.
-		dropdown.addEventListener('change', async (e) => {
-			if (!toggle.checked) return;
-			await runRecurringUpdate({
-				intervalValue: e.target.value,
-				shouldRemainEnabled: false,
-				state: { enabled: true, interval: e.target.value },
-				errorMessage: recurringEnableErrorMessage,
-				errorLog: 'Update recurring failed',
-				revertEnabled: false,
+			// When the dropdown to select an interval is changed.
+			dropdown.addEventListener('change', async (e) => {
+				if (!toggle.checked) return;
+				const intervalValue = buildIntervalValue();
+				await runRecurringUpdate({
+					intervalValue,
+					shouldRemainEnabled: false,
+					state: { enabled: true, interval: intervalValue },
+					errorMessage: recurringEnableErrorMessage,
+					errorLog: 'Update recurring failed',
+					revertEnabled: false,
+				});
 			});
-		});
+
+			// When the count input changes, update recurring immediately.
+			countInput.addEventListener('change', async () => {
+				ensureCountValue();
+				if (!toggle.checked) return;
+				const intervalValue = buildIntervalValue();
+				await runRecurringUpdate({
+					intervalValue,
+					shouldRemainEnabled: false,
+					state: { enabled: true, interval: intervalValue },
+					errorMessage: recurringEnableErrorMessage,
+					errorLog: 'Update recurring failed',
+					revertEnabled: false,
+				});
+			});
 
 		// Listen to cart updates and reset the UI if the cart changes after enabling recurring.
 		if (!cartUpdatedListenerAttached && salla?.event?.cart?.onUpdated) {
@@ -833,32 +908,42 @@
 				if (isCartUpdateSuppressed()) return;
 				if (!toggle.checked || !dropdown.value) return;
 
-				const cart =
-					response?.data?.cart || response?.cart || response?.data;
-				setToggleState(false);
-				dropdown.value = '';
-				clearPersistedState(cart);
-				notifyInfo(recurringResetMessage);
-			});
-		}
+					const cart =
+						response?.data?.cart || response?.cart || response?.data;
+					setToggleState(false);
+					dropdown.value = '';
+					countInput.value = String(DEFAULT_COUNT);
+					clearPersistedState(cart);
+					notifyInfo(recurringResetMessage);
+				});
+			}
 
 		// Restore UI state from localStorage when the cart signature matches.
 		const restorePersistedState = async () => {
 			if (!canPersist) return;
 			try {
-				const cart = await fetchCartItemsWithOptions();
-				const state = await getPersistedState(cart);
-				if (!state) return;
-				if (state.interval) {
-					dropdown.value = state.interval;
-				}
-				setToggleState(!!state.enabled);
-				if (state.enabled && !dropdown.value) {
-					dropdown.value = DEFAULT_INTERVAL;
-				}
-			} catch (err) {
-				console.error(
-					'[Techrar Loop] Restore recurring state failed',
+					const cart = await fetchCartItemsWithOptions();
+					const state = await getPersistedState(cart);
+					if (!state) return;
+					if (state.interval) {
+						const interval = parseInterval(state.interval);
+						if (interval?.unit) {
+							dropdown.value = interval.unit;
+						}
+						if (interval?.count) {
+							countInput.value = String(interval.count);
+						}
+					}
+					setToggleState(!!state.enabled);
+					if (state.enabled) {
+						if (!dropdown.value) {
+							dropdown.value = DEFAULT_UNIT;
+						}
+						ensureCountValue();
+					}
+				} catch (err) {
+					console.error(
+						'[Techrar Loop] Restore recurring state failed',
 					err,
 				);
 			}
@@ -873,16 +958,19 @@
 	 */
 	function parseInterval(value) {
 		if (!value) return null;
-		const [unit, count] = value.split(':');
-		return { unit, count: parseInt(count, 10) };
+		const [unit, countRaw] = String(value).split(':');
+		if (!unit) return null;
+		const count = parseInt(countRaw || String(DEFAULT_COUNT), 10);
+		if (!Number.isInteger(count) || count < 1) return null;
+		return { unit, count };
 	}
 
 	// Resolve interval label using translation keys with fallback.
 	function getIntervalLabel(interval) {
 		const keyMap = {
-			day: 'techrar.daily',
-			week: 'techrar.weekly',
-			month: 'techrar.monthly',
+			day: 'techrar.day',
+			week: 'techrar.week',
+			month: 'techrar.month',
 		};
 
 		const key = keyMap[interval.unit];
@@ -929,9 +1017,6 @@
 			slug: getRecurringSlug(interval.unit),
 			interval_unit: interval.unit,
 			interval_count: interval.count,
-			meta: {
-				techrar_id: CONFIG.techrarIdPlaceholder,
-			},
 		};
 	}
 	// Initialize when DOM is ready
