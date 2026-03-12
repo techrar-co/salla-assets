@@ -1,11 +1,10 @@
 (function () {
 	'use strict';
-
-	// Techrar recurring cart widget for Salla storefronts.
-
-	// Configuration
 	const CONFIG = {
 		sallaAppId: 61340169,
+		resolveAppIdUrl:
+			'http://api.techrar.com/public-api/v1/integrations/salla/resolve-app-id/',
+		manageSubscriptionsBaseUrl: 'https://subscriptions.techrar.com',
 		defaultIntervals: [
 			{ unit: 'day', count: 1, labelEn: 'Day', labelAr: 'يوم' },
 			{ unit: 'week', count: 1, labelEn: 'Week', labelAr: 'أسبوع' },
@@ -21,6 +20,9 @@
 			overlay: 'techrar-recurring-overlay',
 			loading: 'techrar-recurring-loading',
 			placeholder: 'techrar-recurring-placeholder',
+			ordersAction: 'techrar-recurring-orders-action',
+			ordersLoading: 'techrar-recurring-orders-loading',
+			ordersButton: 'techrar-recurring-orders-button',
 		},
 		placement: {
 			useHooks: true,
@@ -65,11 +67,18 @@
 			ar: 'تم تحديث السلة. يرجى إعادة تفعيل الاشتراك المتكرر',
 			en: 'Cart updated. Please re-enable recurring subscription.',
 		},
+		'techrar.manage_recurring_subscriptions': {
+			ar: 'إدارة الاشتراكات المتكررة',
+			en: 'Manage recurring subscriptions',
+		},
 	};
 
 	// Default interval selection when enabling recurring with no selection.
 	const DEFAULT_UNIT = 'week';
 	const DEFAULT_COUNT = 1;
+	const ORDERS_MANAGE_BUTTON_ID = 'techrar-manage-recurring-subscriptions';
+	const ORDERS_HOOK_MOUNT_TIMEOUT_MS = 4000;
+	const ORDERS_MIN_LOADER_MS = 250;
 	// Stable ordering helper for deterministic signatures.
 	const compareById = (a, b) => String(a.id).localeCompare(String(b.id));
 
@@ -78,6 +87,7 @@
 		primary: '#414042',
 	};
 	let placementMounted = false;
+	let ordersButtonMounted = false;
 	let cartUpdatedListenerAttached = false;
 	let lastPersistKey = null;
 	// Persistence is only available in secure contexts with Web Crypto and localStorage.
@@ -98,10 +108,7 @@
 	function init() {
 		salla.onReady(() => {
 			currentLang = salla.config.get('user.language', 'ar');
-			themeColors.primary = salla.config.get(
-				'theme.color.primary',
-				themeColors.primary,
-			);
+			themeColors.primary = resolveThemePrimary(themeColors.primary);
 			registerTranslations();
 			injectStyles(themeColors.primary);
 			registerHooks();
@@ -149,6 +156,168 @@
 	// Build a stable localStorage key per cart.
 	function getPersistKey(cart) {
 		return `techrar-recurring:${cart.store_id}:${cart.id}`;
+	}
+
+	// Resolve/reject a promise within a bounded time window.
+	function withTimeout(promise, timeoutMs, message) {
+		if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+			return promise;
+		}
+		return new Promise((resolve, reject) => {
+			const timer = setTimeout(() => {
+				reject(new Error(message || 'Operation timed out'));
+			}, timeoutMs);
+			promise
+				.then((result) => {
+					clearTimeout(timer);
+					resolve(result);
+				})
+				.catch((err) => {
+					clearTimeout(timer);
+					reject(err);
+				});
+		});
+	}
+
+	// Allow the browser to paint mounted placeholders before async work starts.
+	function nextPaint() {
+		return new Promise((resolve) => {
+			if (typeof requestAnimationFrame === 'function') {
+				requestAnimationFrame(() => resolve());
+				return;
+			}
+			setTimeout(resolve, 0);
+		});
+	}
+
+	function sleep(ms) {
+		return new Promise((resolve) => setTimeout(resolve, ms));
+	}
+
+	async function waitForMinimumDuration(startedAt, minMs) {
+		const elapsed = Date.now() - startedAt;
+		if (elapsed < minMs) {
+			await sleep(minMs - elapsed);
+		}
+	}
+
+	// Normalize any phone-like value into a non-empty trimmed string.
+	function normalizePhoneValue(value) {
+		if (value === null || value === undefined) return '';
+		return String(value).trim();
+	}
+
+	function getCssVariable(name) {
+		const rootValue = normalizePhoneValue(
+			getComputedStyle(document.documentElement).getPropertyValue(name),
+		);
+		if (rootValue) return rootValue;
+		if (document.body) {
+			return normalizePhoneValue(
+				getComputedStyle(document.body).getPropertyValue(name),
+			);
+		}
+		return '';
+	}
+
+	function resolveThemePrimary(fallback) {
+		const configColor = normalizePhoneValue(
+			salla?.config?.get?.('theme.color.primary', ''),
+		);
+		if (configColor) return configColor;
+
+		const cssColor =
+			getCssVariable('--color-primary') ||
+			getCssVariable('--primary-color');
+		if (cssColor) return cssColor;
+
+		const existingPrimaryButton = document.querySelector(
+			[
+				'button.btn--primary',
+				'a.btn--primary',
+				'button.btn-primary',
+				'a.btn-primary',
+				'button[class*="primary"]',
+				'a[class*="primary"]',
+				'salla-button[color="primary"]',
+			].join(','),
+		);
+		if (!existingPrimaryButton) return fallback;
+
+		const computed = getComputedStyle(existingPrimaryButton);
+		return (
+			normalizePhoneValue(computed.backgroundColor) ||
+			normalizePhoneValue(computed.borderColor) ||
+			normalizePhoneValue(computed.color) ||
+			fallback
+		);
+	}
+
+	// Resolve customer phone from config (mobile first, then phone).
+	function getCustomerPhone() {
+		const user = salla?.config?.get?.('user', null);
+		const candidates = [
+			user?.mobile,
+			user?.phone,
+			salla?.config?.get?.('user.mobile', ''),
+			salla?.config?.get?.('user.phone', ''),
+		];
+		for (const candidate of candidates) {
+			const phone = normalizePhoneValue(candidate);
+			if (phone) return phone;
+		}
+		return '';
+	}
+
+	// Resolve the store reference used by the app-id resolver.
+	function getStoreReference() {
+		const store = salla?.config?.get?.('store', null);
+		const candidates = [store?.id, salla?.config?.get?.('store.id', '')];
+		for (const candidate of candidates) {
+			const reference = normalizePhoneValue(candidate);
+			if (reference) return reference;
+		}
+		return '';
+	}
+
+	// Resolve Techrar app id using store reference and optional identity.
+	async function resolveTechrarAppId(reference, identity) {
+		const endpoint = normalizePhoneValue(CONFIG.resolveAppIdUrl);
+		if (!endpoint || !reference) return null;
+		const url = new URL(endpoint, window.location.origin);
+		url.searchParams.set('reference', reference);
+		if (identity) {
+			url.searchParams.set('identity', identity);
+		}
+
+		const response = await fetch(url.toString(), { method: 'GET' });
+		if (!response.ok) {
+			throw new Error(`resolve-app-id failed (${response.status})`);
+		}
+
+		const data = await response.json();
+		const appId = data?.app_id;
+		if (!appId) {
+			throw new Error('resolve-app-id missing app_id');
+		}
+		return appId;
+	}
+
+	// Build the destination URL for subscription management with app id and phone.
+	function buildManageSubscriptionsUrl(appId, phone) {
+		const baseUrl = normalizePhoneValue(CONFIG.manageSubscriptionsBaseUrl);
+		if (!baseUrl || !phone || !appId) return '';
+		try {
+			const url = new URL(
+				`/m/${encodeURIComponent(String(appId))}/`,
+				baseUrl,
+			);
+			url.searchParams.set('phone', phone);
+			url.searchParams.set('utm_source', 'salla');
+			return url.toString();
+		} catch (err) {
+			return '';
+		}
 	}
 
 	// Create a hex digest for a signature string.
@@ -236,6 +405,7 @@
 	function detectThemeStyles() {
 		const themeStyles = {
 			selectClasses: '',
+			buttonClasses: '',
 		};
 
 		// Try to find existing select elements to copy their classes and styles
@@ -250,6 +420,26 @@
 				(cls) => !cls.startsWith('hydrated'),
 			);
 			themeStyles.selectClasses = classes.join(' ');
+		}
+
+		// Try to find the theme's primary button and copy its class names.
+		const primaryButtonSelectors = [
+			'button.btn--primary',
+			'a.btn--primary',
+			'button.btn-primary',
+			'a.btn-primary',
+			'button[class*="primary"]',
+			'a[class*="primary"]',
+			'salla-button[color="primary"]',
+		];
+		const existingPrimaryButton = document.querySelector(
+			primaryButtonSelectors.join(','),
+		);
+		if (existingPrimaryButton) {
+			const classes = Array.from(existingPrimaryButton.classList).filter(
+				(cls) => !cls.startsWith('hydrated'),
+			);
+			themeStyles.buttonClasses = classes.join(' ');
 		}
 
 		return themeStyles;
@@ -390,6 +580,49 @@
 				display: flex;
 			}
 
+				.${CONFIG.cssClasses.ordersAction} {
+					margin: 0 0 16px;
+				}
+
+				.${CONFIG.cssClasses.ordersLoading} {
+					display: flex;
+					align-items: center;
+					justify-content: center;
+					min-height: 40px;
+				}
+
+				.${CONFIG.cssClasses.ordersButton} {
+					display: inline-flex;
+					align-items: center;
+					justify-content: center;
+				min-height: 40px;
+				padding: 0.625rem 1rem;
+				border-radius: var(--swal2-border-radius, 0.3125rem);
+				border: 1px solid var(--color-primary, ${primaryColor});
+				background: var(--color-primary, ${primaryColor});
+				color: var(--color-primary-reverse, #fff);
+				font-family: var(--font-main, inherit);
+				font-size: inherit;
+				font-weight: 600;
+				line-height: 1.2;
+				text-decoration: none;
+				cursor: pointer;
+				transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+			}
+
+			.${CONFIG.cssClasses.ordersButton}:hover {
+				background: var(--color-primary-dark, ${primaryColor});
+				border-color: var(--color-primary-dark, ${primaryColor});
+				color: var(--color-primary-reverse, #fff);
+				text-decoration: none;
+			}
+
+			.${CONFIG.cssClasses.ordersButton}:focus,
+			.${CONFIG.cssClasses.ordersButton}:focus-visible {
+				outline: none;
+				box-shadow: 0 0 0 0.2rem ${primaryShadow};
+			}
+
         `;
 
 		const styleSheet = document.createElement('style');
@@ -403,6 +636,8 @@
 	function registerHooks() {
 		// Inject recurring controls on cart page
 		injectRecurringControls();
+		// Inject manage recurring subscriptions button on customer orders page.
+		injectManageSubscriptionsButton();
 	}
 
 	/**
@@ -448,6 +683,127 @@
 				loadingContainer.remove();
 			}
 		}
+	}
+
+	// Mount an orders action container at the same hook where the manage button appears.
+	async function mountOrdersAction(container) {
+		try {
+			await withTimeout(
+				salla.hooks.mount(
+					'customer:orders.index.items.start',
+					container,
+				),
+				ORDERS_HOOK_MOUNT_TIMEOUT_MS,
+				'Orders hook mount timed out',
+			);
+		} catch (err) {
+			// Fallback below.
+		}
+		if (container.isConnected) return true;
+
+		(document.querySelector('main') || document.body).prepend(container);
+		return true;
+	}
+
+	// Shared wrapper for orders-page action containers.
+	function createOrdersActionContainer(extraClass = '') {
+		const container = document.createElement('div');
+		container.className = extraClass
+			? `${CONFIG.cssClasses.ordersAction} ${extraClass}`
+			: CONFIG.cssClasses.ordersAction;
+		container.setAttribute('data-recurring-orders-action', 'true');
+		return container;
+	}
+
+	// Lightweight loading placeholder shown while resolving app id.
+	function createOrdersLoadingContainer() {
+		const container = createOrdersActionContainer(
+			CONFIG.cssClasses.ordersLoading,
+		);
+		container.setAttribute('aria-busy', 'true');
+		container.innerHTML = spinnerMarkup();
+		return container;
+	}
+
+	// Mount the "Manage recurring subscriptions" button at the orders index hook start.
+	async function injectManageSubscriptionsButton() {
+		if (!salla?.url?.is_page?.('customer.orders.index')) return;
+		if (ordersButtonMounted) return;
+		if (document.getElementById(ORDERS_MANAGE_BUTTON_ID)) {
+			ordersButtonMounted = true;
+			return;
+		}
+
+		const customerPhone = getCustomerPhone();
+		const storeReference = getStoreReference();
+		if (!storeReference) return;
+		if (!customerPhone) return;
+
+		const loadingContainer = createOrdersLoadingContainer();
+		const loadingMounted = await mountOrdersAction(loadingContainer);
+		if (!loadingMounted) return;
+		await nextPaint();
+		const loadingStartedAt = Date.now();
+
+		let appId;
+		try {
+			appId = await resolveTechrarAppId(storeReference, customerPhone);
+		} catch (err) {
+			await waitForMinimumDuration(
+				loadingStartedAt,
+				ORDERS_MIN_LOADER_MS,
+			);
+			console.error(
+				'[Techrar Loop] Unable to load manage subscriptions button. Please share this with support.',
+				err,
+			);
+			if (loadingContainer.isConnected) {
+				loadingContainer.remove();
+			}
+			return;
+		}
+
+		const manageUrl = buildManageSubscriptionsUrl(appId, customerPhone);
+		await waitForMinimumDuration(loadingStartedAt, ORDERS_MIN_LOADER_MS);
+		if (!manageUrl) {
+			if (loadingContainer.isConnected) {
+				loadingContainer.remove();
+			}
+			return;
+		}
+
+		const buttonContainer = createOrdersManageButton(manageUrl);
+		if (loadingContainer.isConnected) {
+			loadingContainer.replaceWith(buttonContainer);
+			ordersButtonMounted = true;
+			return;
+		}
+
+		const mounted = await mountOrdersAction(buttonContainer);
+		ordersButtonMounted = mounted;
+	}
+
+	// Build the customer orders action button with localized copy and theme classes.
+	function createOrdersManageButton(manageUrl) {
+		const themeStyles = detectThemeStyles();
+		const label = t('techrar.manage_recurring_subscriptions');
+
+		const container = createOrdersActionContainer();
+
+		const button = document.createElement('button');
+		button.type = 'button';
+		button.id = ORDERS_MANAGE_BUTTON_ID;
+		button.className = `${CONFIG.cssClasses.ordersButton}${
+			themeStyles.buttonClasses ? ` ${themeStyles.buttonClasses}` : ''
+		}`;
+		button.textContent = label;
+		button.setAttribute('aria-label', label);
+		button.addEventListener('click', () => {
+			window.open(manageUrl, '_blank', 'noopener,noreferrer');
+		});
+
+		container.appendChild(button);
+		return container;
 	}
 
 	// Build the shared Salla loading spinner markup.
@@ -563,20 +919,20 @@
 		// Detect theme styles from existing form elements.
 		const themeStyles = detectThemeStyles();
 
-			// Localized labels for the UI.
-			const labelText = t('techrar.subscribe_label');
-			const dropdownLabel = t('techrar.select_unit');
-			const countPlaceholder = t('techrar.select_count');
+		// Localized labels for the UI.
+		const labelText = t('techrar.subscribe_label');
+		const dropdownLabel = t('techrar.select_unit');
+		const countPlaceholder = t('techrar.select_count');
 
-			// Build form control class lists for both unit dropdown and count input.
-			const baseFieldClass = 's-form-control';
-			const themeFieldClasses = themeStyles.selectClasses
-				? ` ${themeStyles.selectClasses}`
-				: '';
-			const selectClasses = `${CONFIG.cssClasses.dropdown} ${baseFieldClass}${themeFieldClasses}`;
-			const countClasses = `${CONFIG.cssClasses.count} ${baseFieldClass}${themeFieldClasses}`;
+		// Build form control class lists for both unit dropdown and count input.
+		const baseFieldClass = 's-form-control';
+		const themeFieldClasses = themeStyles.selectClasses
+			? ` ${themeStyles.selectClasses}`
+			: '';
+		const selectClasses = `${CONFIG.cssClasses.dropdown} ${baseFieldClass}${themeFieldClasses}`;
+		const countClasses = `${CONFIG.cssClasses.count} ${baseFieldClass}${themeFieldClasses}`;
 
-			container.innerHTML = `
+		container.innerHTML = `
 	            <label class="${CONFIG.cssClasses.label}">
 	                <input type="checkbox" class="${
 						CONFIG.cssClasses.toggle
@@ -610,10 +966,10 @@
 				${overlayMarkup()}
 	        `;
 
-			// Event listeners
-			const toggle = container.querySelector('#recurring-toggle-cart');
-			const dropdown = container.querySelector('#recurring-unit-cart');
-			const countInput = container.querySelector('#recurring-count-cart');
+		// Event listeners
+		const toggle = container.querySelector('#recurring-toggle-cart');
+		const dropdown = container.querySelector('#recurring-unit-cart');
+		const countInput = container.querySelector('#recurring-count-cart');
 
 		// Toggle loading overlay while async updates are running.
 		const setLoading = (isLoading) => {
@@ -710,32 +1066,32 @@
 			return { ready: true, optionsByItemId };
 		};
 
-			const setToggleState = (enabled) => {
-				toggle.checked = enabled;
-				dropdown.disabled = !enabled;
-				countInput.disabled = !enabled;
-			};
+		const setToggleState = (enabled) => {
+			toggle.checked = enabled;
+			dropdown.disabled = !enabled;
+			countInput.disabled = !enabled;
+		};
 
-			const parseCount = (value) => {
-				const parsed = parseInt(String(value || ''), 10);
-				if (!Number.isInteger(parsed) || parsed < 1) {
-					return null;
-				}
-				return parsed;
-			};
+		const parseCount = (value) => {
+			const parsed = parseInt(String(value || ''), 10);
+			if (!Number.isInteger(parsed) || parsed < 1) {
+				return null;
+			}
+			return parsed;
+		};
 
-			const ensureCountValue = () => {
-				const parsed = parseCount(countInput.value);
-				const safeCount = parsed || DEFAULT_COUNT;
-				countInput.value = String(safeCount);
-				return safeCount;
-			};
+		const ensureCountValue = () => {
+			const parsed = parseCount(countInput.value);
+			const safeCount = parsed || DEFAULT_COUNT;
+			countInput.value = String(safeCount);
+			return safeCount;
+		};
 
-			const buildIntervalValue = () => {
-				if (!dropdown.value) return '';
-				const count = ensureCountValue();
-				return `${dropdown.value}:${count}`;
-			};
+		const buildIntervalValue = () => {
+			if (!dropdown.value) return '';
+			const count = ensureCountValue();
+			return `${dropdown.value}:${count}`;
+		};
 
 		const handleNotReady = (shouldRemainEnabled) => {
 			notifyError(optionsRequiredMessage, 'Options required');
@@ -836,70 +1192,70 @@
 		};
 
 		// When the Checkbox is changed.
-			toggle.addEventListener('change', async (e) => {
-				const enabled = e.target.checked;
-				setToggleState(enabled);
+		toggle.addEventListener('change', async (e) => {
+			const enabled = e.target.checked;
+			setToggleState(enabled);
 
-				// If enabled with no explicit selection, default to weekly with count 1.
-				if (enabled && dropdown.value === '') {
-					dropdown.value = DEFAULT_UNIT;
-				}
-				if (enabled) {
-					ensureCountValue();
-				}
-				const intervalValue = buildIntervalValue();
-
-				// If unchecked, clear recurring from all cart items.
-				if (!enabled) {
-					await runRecurringUpdate({
-						recurring: null,
-						shouldRemainEnabled: true,
-						state: { enabled: false, interval: intervalValue },
-						errorMessage: recurringDisableErrorMessage,
-						errorLog: 'Clear recurring failed',
-						revertEnabled: true,
-					});
-					return;
-				}
-
-				await runRecurringUpdate({
-					intervalValue,
-					shouldRemainEnabled: false,
-					state: { enabled: true, interval: intervalValue },
-					errorMessage: recurringEnableErrorMessage,
-					errorLog: 'Apply recurring failed',
-					revertEnabled: false,
-				});
-			});
-
-			// When the dropdown to select an interval is changed.
-			dropdown.addEventListener('change', async (e) => {
-				if (!toggle.checked) return;
-				const intervalValue = buildIntervalValue();
-				await runRecurringUpdate({
-					intervalValue,
-					shouldRemainEnabled: false,
-					state: { enabled: true, interval: intervalValue },
-					errorMessage: recurringEnableErrorMessage,
-					errorLog: 'Update recurring failed',
-					revertEnabled: false,
-				});
-			});
-
-			// When the count input changes, update recurring immediately.
-			countInput.addEventListener('change', async () => {
+			// If enabled with no explicit selection, default to weekly with count 1.
+			if (enabled && dropdown.value === '') {
+				dropdown.value = DEFAULT_UNIT;
+			}
+			if (enabled) {
 				ensureCountValue();
-				if (!toggle.checked) return;
-				const intervalValue = buildIntervalValue();
+			}
+			const intervalValue = buildIntervalValue();
+
+			// If unchecked, clear recurring from all cart items.
+			if (!enabled) {
 				await runRecurringUpdate({
-					intervalValue,
-					shouldRemainEnabled: false,
-					state: { enabled: true, interval: intervalValue },
-					errorMessage: recurringEnableErrorMessage,
-					errorLog: 'Update recurring failed',
-					revertEnabled: false,
+					recurring: null,
+					shouldRemainEnabled: true,
+					state: { enabled: false, interval: intervalValue },
+					errorMessage: recurringDisableErrorMessage,
+					errorLog: 'Clear recurring failed',
+					revertEnabled: true,
 				});
+				return;
+			}
+
+			await runRecurringUpdate({
+				intervalValue,
+				shouldRemainEnabled: false,
+				state: { enabled: true, interval: intervalValue },
+				errorMessage: recurringEnableErrorMessage,
+				errorLog: 'Apply recurring failed',
+				revertEnabled: false,
 			});
+		});
+
+		// When the dropdown to select an interval is changed.
+		dropdown.addEventListener('change', async (e) => {
+			if (!toggle.checked) return;
+			const intervalValue = buildIntervalValue();
+			await runRecurringUpdate({
+				intervalValue,
+				shouldRemainEnabled: false,
+				state: { enabled: true, interval: intervalValue },
+				errorMessage: recurringEnableErrorMessage,
+				errorLog: 'Update recurring failed',
+				revertEnabled: false,
+			});
+		});
+
+		// When the count input changes, update recurring immediately.
+		countInput.addEventListener('change', async () => {
+			ensureCountValue();
+			if (!toggle.checked) return;
+			const intervalValue = buildIntervalValue();
+			await runRecurringUpdate({
+				intervalValue,
+				shouldRemainEnabled: false,
+				state: { enabled: true, interval: intervalValue },
+				errorMessage: recurringEnableErrorMessage,
+				errorLog: 'Update recurring failed',
+				revertEnabled: false,
+			});
+		});
 
 		// Listen to cart updates and reset the UI if the cart changes after enabling recurring.
 		if (!cartUpdatedListenerAttached && salla?.event?.cart?.onUpdated) {
@@ -908,42 +1264,42 @@
 				if (isCartUpdateSuppressed()) return;
 				if (!toggle.checked || !dropdown.value) return;
 
-					const cart =
-						response?.data?.cart || response?.cart || response?.data;
-					setToggleState(false);
-					dropdown.value = '';
-					countInput.value = String(DEFAULT_COUNT);
-					clearPersistedState(cart);
-					notifyInfo(recurringResetMessage);
-				});
-			}
+				const cart =
+					response?.data?.cart || response?.cart || response?.data;
+				setToggleState(false);
+				dropdown.value = '';
+				countInput.value = String(DEFAULT_COUNT);
+				clearPersistedState(cart);
+				notifyInfo(recurringResetMessage);
+			});
+		}
 
 		// Restore UI state from localStorage when the cart signature matches.
 		const restorePersistedState = async () => {
 			if (!canPersist) return;
 			try {
-					const cart = await fetchCartItemsWithOptions();
-					const state = await getPersistedState(cart);
-					if (!state) return;
-					if (state.interval) {
-						const interval = parseInterval(state.interval);
-						if (interval?.unit) {
-							dropdown.value = interval.unit;
-						}
-						if (interval?.count) {
-							countInput.value = String(interval.count);
-						}
+				const cart = await fetchCartItemsWithOptions();
+				const state = await getPersistedState(cart);
+				if (!state) return;
+				if (state.interval) {
+					const interval = parseInterval(state.interval);
+					if (interval?.unit) {
+						dropdown.value = interval.unit;
 					}
-					setToggleState(!!state.enabled);
-					if (state.enabled) {
-						if (!dropdown.value) {
-							dropdown.value = DEFAULT_UNIT;
-						}
-						ensureCountValue();
+					if (interval?.count) {
+						countInput.value = String(interval.count);
 					}
-				} catch (err) {
-					console.error(
-						'[Techrar Loop] Restore recurring state failed',
+				}
+				setToggleState(!!state.enabled);
+				if (state.enabled) {
+					if (!dropdown.value) {
+						dropdown.value = DEFAULT_UNIT;
+					}
+					ensureCountValue();
+				}
+			} catch (err) {
+				console.error(
+					'[Techrar Loop] Restore recurring state failed',
 					err,
 				);
 			}
