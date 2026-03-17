@@ -2,8 +2,9 @@
 	'use strict';
 	const CONFIG = {
 		sallaAppId: 61340169,
+		couponPrefix: 'techrar',
 		resolveAppIdUrl:
-			'http://api.techrar.com/public-api/v1/integrations/salla/resolve-app-id/',
+			'https://api.techrar.com/public-api/v1/integrations/salla/resolve-app-id/',
 		manageSubscriptionsBaseUrl: 'https://subscriptions.techrar.com',
 		defaultIntervals: [
 			{ unit: 'day', count: 1, labelEn: 'Day', labelAr: 'يوم' },
@@ -13,10 +14,12 @@
 		supportedProducts: [],
 		cssClasses: {
 			container: 'techrar-recurring-container',
+			header: 'techrar-recurring-header',
 			toggle: 'techrar-recurring-toggle',
 			dropdown: 'techrar-recurring-dropdown',
 			count: 'techrar-recurring-count',
 			label: 'techrar-recurring-label',
+			note: 'techrar-recurring-note',
 			overlay: 'techrar-recurring-overlay',
 			loading: 'techrar-recurring-loading',
 			placeholder: 'techrar-recurring-placeholder',
@@ -42,6 +45,18 @@
 		'techrar.subscribe_label': {
 			ar: 'اشترك واحصل على المنتجات بشكل متكرر',
 			en: 'Subscribe for recurring delivery',
+		},
+		'techrar.discount_note': {
+			ar: 'ستحصل على خصم.',
+			en: 'You will get a discount.',
+		},
+		'techrar.coupon_apply_error': {
+			ar: 'حدث خطأ أثناء تطبيق رمز الخصم',
+			en: 'An error occurred while applying the coupon',
+		},
+		'techrar.coupon_remove_error': {
+			ar: 'حدث خطأ أثناء إزالة رمز الخصم',
+			en: 'An error occurred while removing the coupon',
 		},
 		'techrar.select_unit': {
 			ar: 'اختر الوحدة',
@@ -303,6 +318,20 @@
 		return appId;
 	}
 
+	async function resolveCurrentTechrarAppId(
+		reference = getStoreReference(),
+		identity = getCustomerPhone(),
+	) {
+		if (!reference) return null;
+		return resolveTechrarAppId(reference, identity);
+	}
+
+	function buildRecurringCouponCode(appId) {
+		return appId
+			? `${normalizePhoneValue(CONFIG.couponPrefix)}${String(appId)}`
+			: '';
+	}
+
 	// Build the destination URL for subscription management with app id and phone.
 	function buildManageSubscriptionsUrl(appId, phone) {
 		const baseUrl = normalizePhoneValue(CONFIG.manageSubscriptionsBaseUrl);
@@ -472,18 +501,32 @@
 				border: 0;
 			}
             
+            .${CONFIG.cssClasses.header} {
+                margin-bottom: 12px;
+            }
+
             /* Label - inherits font and uses theme text color */
             .${CONFIG.cssClasses.label} {
                 display: flex;
                 align-items: center;
                 gap: 8px;
-                margin-bottom: 12px;
+                margin-bottom: 4px;
 	                font-weight: inherit;
                 font-family: var(--font-main, inherit);
                 font-size: inherit;
                 color: var(--main-text-color, var(--main-text-color-dark, inherit));
                 cursor: pointer;
                 line-height: 1.5;
+            }
+
+            .${CONFIG.cssClasses.note} {
+                margin: 0;
+                padding-inline-start: 26px;
+                font-family: var(--font-main, inherit);
+                font-size: 0.875em;
+                line-height: 1.4;
+                color: var(--main-text-color, var(--main-text-color-dark, inherit));
+                opacity: 0.8;
             }
 
             /* Checkbox - with proper border-radius and theme colors */
@@ -540,7 +583,8 @@
 		                box-sizing: border-box;
 	            }
 
-	            .${CONFIG.cssClasses.count} {
+	            .${CONFIG.cssClasses.dropdown} + .${CONFIG.cssClasses.count},
+	            .${CONFIG.cssClasses.count} + .${CONFIG.cssClasses.dropdown} {
 					margin-top: 8px;
 	            }
 
@@ -747,7 +791,10 @@
 
 		let appId;
 		try {
-			appId = await resolveTechrarAppId(storeReference, customerPhone);
+			appId = await resolveCurrentTechrarAppId(
+				storeReference,
+				customerPhone,
+			);
 		} catch (err) {
 			await waitForMinimumDuration(
 				loadingStartedAt,
@@ -921,6 +968,7 @@
 
 		// Localized labels for the UI.
 		const labelText = t('techrar.subscribe_label');
+		const discountNoteText = t('techrar.discount_note');
 		const dropdownLabel = t('techrar.select_unit');
 		const countPlaceholder = t('techrar.select_count');
 
@@ -933,24 +981,15 @@
 		const countClasses = `${CONFIG.cssClasses.count} ${baseFieldClass}${themeFieldClasses}`;
 
 		container.innerHTML = `
-	            <label class="${CONFIG.cssClasses.label}">
-	                <input type="checkbox" class="${
-						CONFIG.cssClasses.toggle
-					}" id="recurring-toggle-cart">
-	                <span>${labelText}</span>
-	            </label>
-	            <select class="${selectClasses}" id="recurring-unit-cart" disabled>
-	                <option value="">${dropdownLabel}</option>
-	                ${CONFIG.defaultIntervals
-						.map(
-							(interval) => `
-	                    <option value="${interval.unit}">
-								${getIntervalLabel(interval)}
-	                    </option>
-	                `,
-						)
-						.join('')}
-	            </select>
+				<div class="${CONFIG.cssClasses.header}">
+		            <label class="${CONFIG.cssClasses.label}">
+		                <input type="checkbox" class="${
+							CONFIG.cssClasses.toggle
+						}" id="recurring-toggle-cart">
+		                <span>${labelText}</span>
+		            </label>
+					<p class="${CONFIG.cssClasses.note}">${discountNoteText}</p>
+				</div>
 				<input
 					type="number"
 					min="1"
@@ -963,6 +1002,18 @@
 					value="${DEFAULT_COUNT}"
 					disabled
 				>
+	            <select class="${selectClasses}" id="recurring-unit-cart" disabled>
+	                <option value="">${dropdownLabel}</option>
+	                ${CONFIG.defaultIntervals
+						.map(
+							(interval) => `
+	                    <option value="${interval.unit}">
+								${getIntervalLabel(interval)}
+	                    </option>
+	                `,
+						)
+						.join('')}
+	            </select>
 				${overlayMarkup()}
 	        `;
 
@@ -984,6 +1035,8 @@
 			'techrar.recurring_disable_error',
 		);
 		const recurringResetMessage = t('techrar.recurring_reset_notice');
+		const couponApplyErrorMessage = t('techrar.coupon_apply_error');
+		const couponRemoveErrorMessage = t('techrar.coupon_remove_error');
 
 		// Action token prevents stale async responses from updating UI state.
 		let actionToken = 0;
@@ -1028,6 +1081,67 @@
 				return;
 			}
 		};
+
+		const formatCouponErrorMessage = (prefix, error) => {
+			const details = normalizePhoneValue(
+				error?.message ||
+					error?.data?.message ||
+					error?.response?.data?.message ||
+					error?.response?.message ||
+					error?.error?.message ||
+					(typeof error?.error === 'string' ? error.error : '') ||
+					(typeof error === 'string' ? error : ''),
+			);
+			return details ? `${prefix}: ${details}` : prefix;
+		};
+
+		const assertCouponResponse = (response, fallback) => {
+			const message = normalizePhoneValue(
+				response?.message ||
+					response?.error?.message ||
+					(typeof response?.error === 'string' ? response.error : ''),
+			);
+			if (response?.success === false) {
+				throw new Error(message || fallback);
+			}
+		};
+
+		const runCouponAction = async (action, errorPrefix, fallback) => {
+			try {
+				const response = await action();
+				assertCouponResponse(response, fallback);
+			} catch (err) {
+				notifyError(
+					formatCouponErrorMessage(errorPrefix, err),
+					'Coupon error',
+				);
+			}
+		};
+
+		const applyRecurringCoupon = () =>
+			runCouponAction(
+				async () => {
+					const appId = await resolveCurrentTechrarAppId();
+					const coupon = buildRecurringCouponCode(appId);
+					if (!coupon) {
+						throw new Error('Techrar coupon unavailable');
+					}
+					suppressCartUpdates();
+					return salla.cart.addCoupon(coupon);
+				},
+				couponApplyErrorMessage,
+				'Coupon apply failed',
+			);
+
+		const removeRecurringCoupon = () =>
+			runCouponAction(
+				() => {
+					suppressCartUpdates();
+					return salla.cart.deleteCoupon();
+				},
+				couponRemoveErrorMessage,
+				'Coupon removal failed',
+			);
 
 		// Suppress cart-updated events while our own updates are running.
 		const suppressCartUpdates = (ms = 1500) => {
@@ -1166,26 +1280,32 @@
 			errorMessage,
 			errorLog,
 			revertEnabled,
+			afterSuccess,
 		}) => {
 			const token = beginAction();
 			try {
 				const interval = intervalValue
 					? parseInterval(intervalValue)
 					: undefined;
-				if (intervalValue && !interval) return;
-				await updateRecurringForCart({
+				if (intervalValue && !interval) return false;
+				const updated = await updateRecurringForCart({
 					interval,
 					recurring,
 					shouldRemainEnabled,
 					token,
 					state,
 				});
+				if (updated && afterSuccess && isCurrentAction(token)) {
+					await afterSuccess();
+				}
+				return !!updated;
 			} catch (err) {
 				if (isCurrentAction(token)) {
 					console.error(`[Techrar Loop] ${errorLog}`, err);
 					notifyError(errorMessage, 'Recurring error');
 					setToggleState(revertEnabled);
 				}
+				return false;
 			} finally {
 				endAction(token);
 			}
@@ -1214,6 +1334,7 @@
 					errorMessage: recurringDisableErrorMessage,
 					errorLog: 'Clear recurring failed',
 					revertEnabled: true,
+					afterSuccess: removeRecurringCoupon,
 				});
 				return;
 			}
@@ -1225,6 +1346,7 @@
 				errorMessage: recurringEnableErrorMessage,
 				errorLog: 'Apply recurring failed',
 				revertEnabled: false,
+				afterSuccess: applyRecurringCoupon,
 			});
 		});
 
