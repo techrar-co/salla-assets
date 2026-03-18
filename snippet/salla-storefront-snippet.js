@@ -295,15 +295,12 @@
 		return '';
 	}
 
-	// Resolve Techrar app id using store reference and optional identity.
-	async function resolveTechrarAppId(reference, identity) {
+	// Resolve Techrar app id using the store reference only.
+	async function resolveTechrarAppId(reference) {
 		const endpoint = normalizePhoneValue(CONFIG.resolveAppIdUrl);
 		if (!endpoint || !reference) return null;
 		const url = new URL(endpoint, window.location.origin);
 		url.searchParams.set('reference', reference);
-		if (identity) {
-			url.searchParams.set('identity', identity);
-		}
 
 		const response = await fetch(url.toString(), { method: 'GET' });
 		if (!response.ok) {
@@ -318,12 +315,9 @@
 		return appId;
 	}
 
-	async function resolveCurrentTechrarAppId(
-		reference = getStoreReference(),
-		identity = getCustomerPhone(),
-	) {
+	async function resolveCurrentTechrarAppId(reference = getStoreReference()) {
 		if (!reference) return null;
-		return resolveTechrarAppId(reference, identity);
+		return resolveTechrarAppId(reference);
 	}
 
 	function buildRecurringCouponCode(appId) {
@@ -791,10 +785,7 @@
 
 		let appId;
 		try {
-			appId = await resolveCurrentTechrarAppId(
-				storeReference,
-				customerPhone,
-			);
+			appId = await resolveCurrentTechrarAppId(storeReference);
 		} catch (err) {
 			await waitForMinimumDuration(
 				loadingStartedAt,
