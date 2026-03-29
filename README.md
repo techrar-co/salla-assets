@@ -12,19 +12,20 @@ The simplest temporary production setup for this repo is:
 1. Keep the snippet source in `snippet/salla-storefront-snippet.js`.
 2. Build a minified release into `dist/salla/releases/`.
 3. Publish a plain semver git tag like `0.1.0`.
-4. Let Salla load the stable major-alias URL instead of `@main`.
+4. Let Salla load the stable semver-alias URL instead of `@main`.
 
-Recommended Salla bootstrap target while the project is on `0.x`:
+Recommended Salla bootstrap target while the project is on `0.1.x`:
 
 ```text
-https://cdn.jsdelivr.net/gh/techrar-co/salla-assets@0/dist/salla/current.js
+https://cdn.jsdelivr.net/gh/techrar-co/salla-assets@0.1/dist/salla/current.js
 ```
 
 Why this repo does **not** recommend `@main` or a bare `@latest` URL:
 
 - branch URLs are not deterministic enough for production
 - `@latest` tracks the latest semver release, which is broader than needed
-- jsDelivr alias URLs are cache-heavy, so a stable major alias is safer than following a branch
+- jsDelivr alias URLs are cache-heavy, so a stable semver alias is safer than following a branch
+- for pre-`1.0.0` releases, use the `0.x` minor alias such as `@0.1`, not `@0`
 
 ## Commands
 

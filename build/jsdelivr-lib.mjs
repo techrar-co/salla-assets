@@ -98,15 +98,17 @@ function renderCurrentScript(src, version) {
 export function getJsdelivrUrls(version) {
 	assertSemver(version);
 
-	const major = version.split('.')[0];
+	const [major, minor] = version.split('.');
+	const stableAlias = major === '0' ? `${major}.${minor}` : major;
 	const versionedReleaseUrl = `https://cdn.jsdelivr.net/gh/${repoSlug}@${version}/dist/salla/releases/${releaseFilename(version)}`;
 	const versionedCurrentUrl = `https://cdn.jsdelivr.net/gh/${repoSlug}@${version}/dist/salla/current.js`;
-	const stableCurrentUrl = `https://cdn.jsdelivr.net/gh/${repoSlug}@${major}/dist/salla/current.js`;
+	const stableCurrentUrl = `https://cdn.jsdelivr.net/gh/${repoSlug}@${stableAlias}/dist/salla/current.js`;
 	const latestCurrentUrl = `https://cdn.jsdelivr.net/gh/${repoSlug}@latest/dist/salla/current.js`;
 
 	return {
 		version,
 		majorAlias: major,
+		stableAlias,
 		versionedReleaseUrl,
 		versionedCurrentUrl,
 		stableCurrentUrl,
