@@ -1,0 +1,16 @@
+{
+  "name": "salla-assets",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "scripts": {
+    "build:jsdelivr": "node build/build-jsdelivr.mjs",
+    "release:jsdelivr": "node build/release-jsdelivr.mjs",
+    "release:jsdelivr:patch": "node build/release-jsdelivr.mjs --bump patch",
+    "release:jsdelivr:minor": "node build/release-jsdelivr.mjs --bump minor",
+    "release:jsdelivr:major": "node build/release-jsdelivr.mjs --bump major"
+  },
+  "devDependencies": {
+    "terser": "^5.39.0"
+  }
+}
