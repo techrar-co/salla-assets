@@ -15,6 +15,12 @@
 		cssClasses: {
 			container: 'techrar-recurring-container',
 			header: 'techrar-recurring-header',
+			itemsSection: 'techrar-recurring-items-section',
+			items: 'techrar-recurring-items',
+			item: 'techrar-recurring-item',
+			itemImage: 'techrar-recurring-item-image',
+			itemName: 'techrar-recurring-item-name',
+			itemsTitle: 'techrar-recurring-items-title',
 			toggle: 'techrar-recurring-toggle',
 			dropdown: 'techrar-recurring-dropdown',
 			count: 'techrar-recurring-count',
@@ -49,6 +55,10 @@
 		'techrar.discount_note': {
 			ar: 'ستحصل على خصم.',
 			en: 'You will get a discount.',
+		},
+		'techrar.choose_items': {
+			ar: 'اختر المنتجات التي تريد تضمينها في الشراء المتكرر.',
+			en: 'Choose the items to include in the recurring purchase.',
 		},
 		'techrar.coupon_apply_error': {
 			ar: 'حدث خطأ أثناء تطبيق رمز الخصم',
@@ -220,6 +230,12 @@
 	function normalizePhoneValue(value) {
 		if (value === null || value === undefined) return '';
 		return String(value).trim();
+	}
+
+	function escapeHtml(value) {
+		const text = document.createElement('div');
+		text.textContent = normalizePhoneValue(value);
+		return text.innerHTML;
 	}
 
 	function getCssVariable(name) {
@@ -399,11 +415,15 @@
 			const signature = await buildCartSignature(cart);
 			const persistKey = getPersistKey(cart);
 			lastPersistKey = persistKey;
+			const selectedItemIds = Array.isArray(state.selectedItemIds)
+				? Array.from(new Set(state.selectedItemIds.map((id) => String(id)))).toSorted()
+				: [];
 			localStorage.setItem(
 				persistKey,
 				JSON.stringify({
 					enabled: !!state.enabled,
 					interval: state.interval || '',
+					selectedItemIds,
 					signature,
 				}),
 			);
@@ -513,18 +533,68 @@
                 line-height: 1.5;
             }
 
-            .${CONFIG.cssClasses.note} {
-                margin: 0;
-                padding-inline-start: 26px;
-                font-family: var(--font-main, inherit);
-                font-size: 0.875em;
-                line-height: 1.4;
-                color: var(--main-text-color, var(--main-text-color-dark, inherit));
-                opacity: 0.8;
-            }
+	            .${CONFIG.cssClasses.note} {
+	                margin: 0;
+	                padding-inline-start: 26px;
+	                font-family: var(--font-main, inherit);
+	                font-size: 0.875em;
+	                line-height: 1.4;
+	                color: var(--main-text-color, var(--main-text-color-dark, inherit));
+	                opacity: 0.8;
+	            }
 
-            /* Checkbox - with proper border-radius and theme colors */
-            .${CONFIG.cssClasses.toggle} {
+	            .${CONFIG.cssClasses.itemsSection} {
+	                margin: 16px 0 12px;
+	            }
+
+	            .${CONFIG.cssClasses.itemsTitle} {
+	                margin: 0 0 10px;
+	                font-family: var(--font-main, inherit);
+	                font-size: 0.875em;
+	                line-height: 1.4;
+	                color: var(--main-text-color, var(--main-text-color-dark, inherit));
+	                opacity: 0.85;
+	            }
+
+	            .${CONFIG.cssClasses.items} {
+	                display: flex;
+	                flex-direction: column;
+	                gap: 8px;
+	                margin: 0 0 12px;
+	                padding: 0;
+	                list-style: none;
+	            }
+
+	            .${CONFIG.cssClasses.item} {
+	                display: flex;
+	                align-items: center;
+	                gap: 10px;
+	                min-width: 0;
+	                margin: 0;
+	                cursor: pointer;
+	            }
+
+	            .${CONFIG.cssClasses.itemImage} {
+	                width: 40px;
+	                height: 40px;
+	                object-fit: cover;
+	                border-radius: var(--swal2-border-radius, 0.3125rem);
+	                border: 1px solid var(--color-light-grey, #eee);
+	                background: var(--bg-gray, var(--color-grey, var(--color-light-grey, #f5f7f9)));
+	                flex-shrink: 0;
+	            }
+
+	            .${CONFIG.cssClasses.itemName} {
+	                min-width: 0;
+	                font-size: 0.9375em;
+	                line-height: 1.4;
+	                white-space: nowrap;
+	                overflow: hidden;
+	                text-overflow: ellipsis;
+	            }
+
+	            /* Checkbox - with proper border-radius and theme colors */
+	            .${CONFIG.cssClasses.toggle} {
                 width: 18px;
                 height: 18px;
                 cursor: pointer;
@@ -563,9 +633,14 @@
                 outline: none !important;
                 border-color: var(--color-primary, ${primaryColor}) !important;
                 box-shadow: 0 0 0 0.18rem ${primaryShadow} !important;
-                --tw-ring-color: var(--color-primary, ${primaryColor});
-                --tw-ring-shadow: 0 0 0 0.18rem ${primaryShadow};
-            }
+	                --tw-ring-color: var(--color-primary, ${primaryColor});
+	                --tw-ring-shadow: 0 0 0 0.18rem ${primaryShadow};
+	            }
+
+	            .${CONFIG.cssClasses.toggle}:disabled {
+	                cursor: default;
+	                opacity: 1;
+	            }
             
             /* Dropdown - full fallback styles, but theme classes can override */
 	            .${CONFIG.cssClasses.dropdown},
@@ -712,8 +787,8 @@
 			// 	}
 			// }
 
-			renderRecurringUI(loadingContainer);
-			shouldShowUI = true;
+				renderRecurringUI(loadingContainer, items);
+				shouldShowUI = true;
 		} catch (err) {
 			console.error('[Techrar Loop] Failed to evaluate cart state', err);
 		} finally {
@@ -856,6 +931,40 @@
 		}" aria-hidden="true">${spinnerMarkup()}</div>`;
 	}
 
+	function renderRecurringItemsMarkup(items, title) {
+		return `
+			<div class="${CONFIG.cssClasses.itemsSection}">
+				<p class="${CONFIG.cssClasses.itemsTitle}">${escapeHtml(title)}</p>
+				<ul class="${CONFIG.cssClasses.items}">
+					${items
+						.map(
+							(item) => `
+						<li>
+							<label class="${CONFIG.cssClasses.item}">
+								<input
+									type="checkbox"
+									class="${CONFIG.cssClasses.toggle}"
+									data-recurring-item-id="${escapeHtml(item.id)}"
+								>
+								<img
+									class="${CONFIG.cssClasses.itemImage}"
+									src="${escapeHtml(item.product_image)}"
+									alt="${escapeHtml(item.product_name)}"
+									loading="lazy"
+								>
+								<span class="${CONFIG.cssClasses.itemName}">${escapeHtml(
+									item.product_name,
+								)}</span>
+							</label>
+						</li>
+					`,
+						)
+						.join('')}
+				</ul>
+			</div>
+		`;
+	}
+
 	// Create a lightweight container that only shows a spinner.
 	function createLoadingContainer() {
 		const container = document.createElement('div');
@@ -949,7 +1058,7 @@
 	}
 
 	// Build and wire the recurring purchase UI.
-	function renderRecurringUI(container) {
+	function renderRecurringUI(container, items) {
 		container.classList.remove(CONFIG.cssClasses.loading);
 		container.classList.remove(CONFIG.cssClasses.placeholder);
 		container.setAttribute('aria-busy', 'false');
@@ -960,8 +1069,11 @@
 		// Localized labels for the UI.
 		const labelText = t('techrar.subscribe_label');
 		const discountNoteText = t('techrar.discount_note');
+		const itemsTitleText = t('techrar.choose_items');
 		const dropdownLabel = t('techrar.select_unit');
 		const countPlaceholder = t('techrar.select_count');
+		const allItemIds = items.map((item) => String(item.id));
+		const allItemIdSet = new Set(allItemIds);
 
 		// Build form control class lists for both unit dropdown and count input.
 		const baseFieldClass = 's-form-control';
@@ -972,7 +1084,7 @@
 		const countClasses = `${CONFIG.cssClasses.count} ${baseFieldClass}${themeFieldClasses}`;
 
 		container.innerHTML = `
-				<div class="${CONFIG.cssClasses.header}">
+					<div class="${CONFIG.cssClasses.header}">
 		            <label class="${CONFIG.cssClasses.label}">
 		                <input type="checkbox" class="${
 							CONFIG.cssClasses.toggle
@@ -981,6 +1093,7 @@
 		            </label>
 					<p class="${CONFIG.cssClasses.note}">${discountNoteText}</p>
 				</div>
+				${renderRecurringItemsMarkup(items, itemsTitleText)}
 				<input
 					type="number"
 					min="1"
@@ -1006,12 +1119,54 @@
 						.join('')}
 	            </select>
 				${overlayMarkup()}
-	        `;
+		        `;
 
 		// Event listeners
 		const toggle = container.querySelector('#recurring-toggle-cart');
 		const dropdown = container.querySelector('#recurring-unit-cart');
 		const countInput = container.querySelector('#recurring-count-cart');
+		const itemsSection = container.querySelector(
+			`.${CONFIG.cssClasses.itemsSection}`,
+		);
+		const itemToggles = Array.from(
+			container.querySelectorAll('[data-recurring-item-id]'),
+		);
+		let selectedItemIds = new Set();
+
+		const normalizeSelectedItemIds = (value, fallbackToAll = false) => {
+			const source = Array.isArray(value) ? value : fallbackToAll ? allItemIds : [];
+			return Array.from(
+				new Set(
+					source
+						.map((itemId) => String(itemId))
+						.filter((itemId) => allItemIdSet.has(itemId)),
+				),
+			);
+		};
+
+		const getSelectedItemIds = () => Array.from(selectedItemIds).toSorted();
+
+		const applyUiState = (enabled, nextSelectedItemIds = []) => {
+			const normalizedSelectedItemIds = enabled
+				? normalizeSelectedItemIds(nextSelectedItemIds)
+				: [];
+			selectedItemIds = new Set(normalizedSelectedItemIds);
+
+			toggle.checked = enabled;
+			dropdown.disabled = !enabled;
+			countInput.disabled = !enabled;
+			if (itemsSection) {
+				itemsSection.hidden = !enabled;
+			}
+
+			itemToggles.forEach((itemToggle) => {
+				const itemId = normalizePhoneValue(
+					itemToggle.getAttribute('data-recurring-item-id'),
+				);
+				itemToggle.disabled = !enabled;
+				itemToggle.checked = enabled && selectedItemIds.has(itemId);
+			});
+		};
 
 		// Toggle loading overlay while async updates are running.
 		const setLoading = (isLoading) => {
@@ -1171,12 +1326,6 @@
 			return { ready: true, optionsByItemId };
 		};
 
-		const setToggleState = (enabled) => {
-			toggle.checked = enabled;
-			dropdown.disabled = !enabled;
-			countInput.disabled = !enabled;
-		};
-
 		const parseCount = (value) => {
 			const parsed = parseInt(String(value || ''), 10);
 			if (!Number.isInteger(parsed) || parsed < 1) {
@@ -1198,26 +1347,47 @@
 			return `${dropdown.value}:${count}`;
 		};
 
-		const handleNotReady = (shouldRemainEnabled) => {
+		const buildRecurringState = (enabled, nextSelectedItemIds = []) => {
+			const normalizedSelectedItemIds = enabled
+				? normalizeSelectedItemIds(nextSelectedItemIds)
+				: [];
+			return {
+				enabled: !!enabled && normalizedSelectedItemIds.length > 0,
+				interval: buildIntervalValue(),
+				selectedItemIds: normalizedSelectedItemIds,
+			};
+		};
+
+		const restoreUiState = (state) => {
+			applyUiState(!!state?.enabled, state?.selectedItemIds || []);
+		};
+
+		const handleNotReady = (revertState) => {
 			notifyError(optionsRequiredMessage, 'Options required');
-			setToggleState(!!shouldRemainEnabled);
+			restoreUiState(revertState);
 		};
 
 		// Update each cart item with recurring payload, options, and quantity.
 		const updateCartItems = async (
 			items,
 			optionsByItemId,
-			recurring,
+			recurringPayload,
+			nextSelectedItemIds,
 			token,
 		) => {
+			const selectedItemIdSet = new Set(
+				(nextSelectedItemIds || []).map((itemId) => String(itemId)),
+			);
 			for (const item of items) {
 				if (!isCurrentAction(token)) return false;
 				suppressCartUpdates();
+				const shouldApplyRecurring =
+					!!recurringPayload && selectedItemIdSet.has(String(item.id));
 				const response = await salla.api.cart.updateItem({
 					id: item.id,
 					quantity: item.quantity,
 					options: optionsByItemId.get(item.id),
-					recurring,
+					recurring: shouldApplyRecurring ? recurringPayload : null,
 				});
 				if (response?.success === false) {
 					throw new Error('Salla cart update failed');
@@ -1229,31 +1399,44 @@
 		// Prepare recurring payload, validate options, and update the cart.
 		const updateRecurringForCart = async ({
 			interval,
-			recurring,
-			shouldRemainEnabled,
 			token,
 			state,
+			revertState,
+			itemIdsToUpdate,
 		}) => {
 			const cart = await fetchCartItemsWithOptions();
 			const items = cart?.items || [];
 			if (!isCurrentAction(token)) return false;
+			const itemIdSet = Array.isArray(itemIdsToUpdate)
+				? new Set(itemIdsToUpdate.map((itemId) => String(itemId)))
+				: null;
+			const itemsToUpdate = itemIdSet
+				? items.filter((item) => itemIdSet.has(String(item.id)))
+				: items;
+			if (itemIdSet && itemsToUpdate.length !== itemIdSet.size) {
+				throw new Error('Salla cart item missing');
+			}
 
-			const { ready, optionsByItemId } = validateCartItems(items);
+			const { ready, optionsByItemId } = validateCartItems(itemsToUpdate);
 			if (!ready) {
 				if (isCurrentAction(token)) {
-					handleNotReady(shouldRemainEnabled);
+					handleNotReady(revertState);
 				}
 				return false;
 			}
 
+			const nextSelectedItemIds = Array.isArray(state?.selectedItemIds)
+				? state.selectedItemIds
+				: [];
 			const recurringPayload =
-				recurring === undefined
+				state?.enabled && nextSelectedItemIds.length > 0
 					? buildRecurringPayload(interval)
-					: recurring;
+					: null;
 			const updated = await updateCartItems(
-				items,
+				itemsToUpdate,
 				optionsByItemId,
 				recurringPayload,
+				nextSelectedItemIds,
 				token,
 			);
 			if (updated && state && isCurrentAction(token)) {
@@ -1264,27 +1447,32 @@
 
 		// Wrapper to run the recurring update flow with shared error handling.
 		const runRecurringUpdate = async ({
-			intervalValue,
-			recurring,
-			shouldRemainEnabled,
 			state,
 			errorMessage,
 			errorLog,
-			revertEnabled,
+			revertState,
 			afterSuccess,
+			itemIdsToUpdate,
 		}) => {
 			const token = beginAction();
 			try {
-				const interval = intervalValue
-					? parseInterval(intervalValue)
-					: undefined;
-				if (intervalValue && !interval) return false;
+				const hasSelectedItems =
+					!!state?.enabled &&
+					Array.isArray(state.selectedItemIds) &&
+					state.selectedItemIds.length > 0;
+				const interval = hasSelectedItems
+					? parseInterval(state.interval)
+					: null;
+				if (hasSelectedItems && !interval) {
+					restoreUiState(revertState);
+					return false;
+				}
 				const updated = await updateRecurringForCart({
 					interval,
-					recurring,
-					shouldRemainEnabled,
 					token,
 					state,
+					revertState,
+					itemIdsToUpdate,
 				});
 				if (updated && afterSuccess && isCurrentAction(token)) {
 					await afterSuccess();
@@ -1294,7 +1482,7 @@
 				if (isCurrentAction(token)) {
 					console.error(`[Techrar Loop] ${errorLog}`, err);
 					notifyError(errorMessage, 'Recurring error');
-					setToggleState(revertEnabled);
+					restoreUiState(revertState);
 				}
 				return false;
 			} finally {
@@ -1302,56 +1490,96 @@
 			}
 		};
 
+		applyUiState(false, []);
+
 		// When the Checkbox is changed.
 		toggle.addEventListener('change', async (e) => {
 			const enabled = e.target.checked;
-			setToggleState(enabled);
+			const previousState = buildRecurringState(true, getSelectedItemIds());
 
-			// If enabled with no explicit selection, default to weekly with count 1.
-			if (enabled && dropdown.value === '') {
-				dropdown.value = DEFAULT_UNIT;
-			}
-			if (enabled) {
-				ensureCountValue();
-			}
-			const intervalValue = buildIntervalValue();
-
-			// If unchecked, clear recurring from all cart items.
 			if (!enabled) {
+				applyUiState(false, []);
 				await runRecurringUpdate({
-					recurring: null,
-					shouldRemainEnabled: true,
-					state: { enabled: false, interval: intervalValue },
+					state: buildRecurringState(false, []),
 					errorMessage: recurringDisableErrorMessage,
 					errorLog: 'Clear recurring failed',
-					revertEnabled: true,
+					revertState: previousState,
 					afterSuccess: removeRecurringCoupon,
 				});
 				return;
 			}
 
+			// If enabled with no explicit selection, default to weekly with count 1.
+			if (dropdown.value === '') {
+				dropdown.value = DEFAULT_UNIT;
+			}
+			ensureCountValue();
+			applyUiState(true, allItemIds);
+
 			await runRecurringUpdate({
-				intervalValue,
-				shouldRemainEnabled: false,
-				state: { enabled: true, interval: intervalValue },
+				state: buildRecurringState(true, allItemIds),
 				errorMessage: recurringEnableErrorMessage,
 				errorLog: 'Apply recurring failed',
-				revertEnabled: false,
+				revertState: buildRecurringState(false, []),
 				afterSuccess: applyRecurringCoupon,
 			});
 		});
 
+		itemToggles.forEach((itemToggle) => {
+			itemToggle.addEventListener('change', async (e) => {
+				if (!toggle.checked) return;
+
+				const previousState = buildRecurringState(true, getSelectedItemIds());
+				const nextSelectedItemIds = new Set(previousState.selectedItemIds);
+				const itemId = normalizePhoneValue(
+					e.target.getAttribute('data-recurring-item-id'),
+				);
+
+				if (e.target.checked) {
+					nextSelectedItemIds.add(itemId);
+				} else {
+					nextSelectedItemIds.delete(itemId);
+				}
+
+				const shouldRemainEnabled = nextSelectedItemIds.size > 0;
+				if (shouldRemainEnabled && dropdown.value === '') {
+					dropdown.value = DEFAULT_UNIT;
+				}
+				if (shouldRemainEnabled) {
+					ensureCountValue();
+				}
+
+				applyUiState(shouldRemainEnabled, Array.from(nextSelectedItemIds));
+
+				await runRecurringUpdate({
+					state: buildRecurringState(
+						shouldRemainEnabled,
+						Array.from(nextSelectedItemIds),
+					),
+					errorMessage: shouldRemainEnabled
+						? recurringEnableErrorMessage
+						: recurringDisableErrorMessage,
+					errorLog: shouldRemainEnabled
+						? 'Update recurring selection failed'
+						: 'Clear recurring failed',
+					revertState: previousState,
+					afterSuccess: shouldRemainEnabled
+						? undefined
+						: removeRecurringCoupon,
+					itemIdsToUpdate: [itemId],
+				});
+			});
+		});
+
 		// When the dropdown to select an interval is changed.
-		dropdown.addEventListener('change', async (e) => {
+		dropdown.addEventListener('change', async () => {
 			if (!toggle.checked) return;
-			const intervalValue = buildIntervalValue();
+			const previousState = buildRecurringState(true, getSelectedItemIds());
 			await runRecurringUpdate({
-				intervalValue,
-				shouldRemainEnabled: false,
-				state: { enabled: true, interval: intervalValue },
+				state: buildRecurringState(true, getSelectedItemIds()),
 				errorMessage: recurringEnableErrorMessage,
 				errorLog: 'Update recurring failed',
-				revertEnabled: false,
+				revertState: previousState,
 			});
 		});
 
@@ -1359,33 +1587,31 @@
 		countInput.addEventListener('change', async () => {
 			ensureCountValue();
 			if (!toggle.checked) return;
-			const intervalValue = buildIntervalValue();
+			const previousState = buildRecurringState(true, getSelectedItemIds());
 			await runRecurringUpdate({
-				intervalValue,
-				shouldRemainEnabled: false,
-				state: { enabled: true, interval: intervalValue },
+				state: buildRecurringState(true, getSelectedItemIds()),
 				errorMessage: recurringEnableErrorMessage,
 				errorLog: 'Update recurring failed',
-				revertEnabled: false,
+				revertState: previousState,
 			});
 		});
 
-		// Listen to cart updates and reset the UI if the cart changes after enabling recurring.
-		if (!cartUpdatedListenerAttached && salla?.event?.cart?.onUpdated) {
-			cartUpdatedListenerAttached = true;
-			salla.event.cart.onUpdated((response) => {
-				if (isCartUpdateSuppressed()) return;
-				if (!toggle.checked || !dropdown.value) return;
+			// Listen to cart updates and reset the UI if the cart changes after enabling recurring.
+			if (!cartUpdatedListenerAttached && salla?.event?.cart?.onUpdated) {
+				cartUpdatedListenerAttached = true;
+				salla.event.cart.onUpdated((response) => {
+					if (isCartUpdateSuppressed()) return;
+					if (!toggle.checked || !dropdown.value) return;
 
-				const cart =
-					response?.data?.cart || response?.cart || response?.data;
-				setToggleState(false);
-				dropdown.value = '';
-				countInput.value = String(DEFAULT_COUNT);
-				clearPersistedState(cart);
-				notifyInfo(recurringResetMessage);
-			});
-		}
+					const cart =
+						response?.data?.cart || response?.cart || response?.data;
+					applyUiState(false, []);
+					dropdown.value = '';
+					countInput.value = String(DEFAULT_COUNT);
+					clearPersistedState(cart);
+					notifyInfo(recurringResetMessage);
+				});
+			}
 
 		// Restore UI state from localStorage when the cart signature matches.
 		const restorePersistedState = async () => {
@@ -1403,13 +1629,17 @@
 						countInput.value = String(interval.count);
 					}
 				}
-				setToggleState(!!state.enabled);
-				if (state.enabled) {
-					if (!dropdown.value) {
-						dropdown.value = DEFAULT_UNIT;
-					}
-					ensureCountValue();
+				if (!state.enabled) return;
+
+				const restoredSelectedItemIds = Array.isArray(state.selectedItemIds)
+					? normalizeSelectedItemIds(state.selectedItemIds)
+					: allItemIds;
+				if (restoredSelectedItemIds.length === 0) return;
+				if (!dropdown.value) {
+					dropdown.value = DEFAULT_UNIT;
 				}
+				ensureCountValue();
+				applyUiState(true, restoredSelectedItemIds);
 			} catch (err) {
 				console.error(
 					'[Techrar Loop] Restore recurring state failed',
