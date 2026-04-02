@@ -3,15 +3,14 @@
 	const CONFIG = {
 		sallaAppId: 61340169,
 		couponPrefix: 'techrar',
-		resolveAppIdUrl:
-			'https://api.techrar.com/public-api/v1/integrations/salla/resolve-app-id/',
+		resolveAppConfigUrl:
+			'https://api.techrar.com/public-api/v1/integrations/salla/resolve-app-config/',
 		manageSubscriptionsBaseUrl: 'https://subscriptions.techrar.com',
 		defaultIntervals: [
 			{ unit: 'day', count: 1, labelEn: 'Day', labelAr: 'يوم' },
 			{ unit: 'week', count: 1, labelEn: 'Week', labelAr: 'أسبوع' },
 			{ unit: 'month', count: 1, labelEn: 'Month', labelAr: 'شهر' },
 		],
-		supportedProducts: [],
 		cssClasses: {
 			container: 'techrar-recurring-container',
 			header: 'techrar-recurring-header',
@@ -104,6 +103,12 @@
 	const ORDERS_MANAGE_BUTTON_ID = 'techrar-manage-recurring-subscriptions';
 	const ORDERS_HOOK_MOUNT_TIMEOUT_MS = 4000;
 	const ORDERS_MIN_LOADER_MS = 250;
+	const DEFAULT_APP_CONFIG = Object.freeze({
+		appId: null,
+		productWhitelistingEnabled: false,
+		supportedProducts: [],
+	});
+	const SALLA_LOCALE_SEGMENTS = new Set(['ar', 'en']);
 	// Stable ordering helper for deterministic signatures.
 	const compareById = (a, b) => String(a.id).localeCompare(String(b.id));
 
@@ -115,6 +120,8 @@
 	let ordersButtonMounted = false;
 	let cartUpdatedListenerAttached = false;
 	let lastPersistKey = null;
+	let cachedAppConfigReference = '';
+	let cachedAppConfigPromise = null;
 	// Persistence is only available in secure contexts with Web Crypto and localStorage.
 	const canPersist =
 		typeof window !== 'undefined' &&
@@ -232,6 +239,75 @@
 		return String(value).trim();
 	}
 
+	function cloneDefaultAppConfig() {
+		return {
+			appId: DEFAULT_APP_CONFIG.appId,
+			productWhitelistingEnabled:
+				DEFAULT_APP_CONFIG.productWhitelistingEnabled,
+			supportedProducts: [],
+		};
+	}
+
+	function normalizeBooleanValue(value) {
+		if (typeof value === 'boolean') return value;
+		if (typeof value === 'string') {
+			return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
+		}
+		if (typeof value === 'number') return value !== 0;
+		return false;
+	}
+
+	function normalizePathname(value) {
+		const normalizedValue = normalizePhoneValue(value);
+		if (!normalizedValue) return '';
+		if (normalizedValue === '/') return '/';
+		return normalizedValue.replace(/\/+$/, '');
+	}
+
+	function stripSallaLocalePrefix(pathname) {
+		const normalizedPath = normalizePathname(pathname);
+		if (!normalizedPath || normalizedPath === '/') return normalizedPath;
+
+		const segments = normalizedPath.split('/').filter(Boolean);
+		if (segments.length === 0) return '/';
+
+		if (!SALLA_LOCALE_SEGMENTS.has(segments[0].toLowerCase())) {
+			return normalizedPath;
+		}
+
+		return segments.length > 1 ? `/${segments.slice(1).join('/')}` : '/';
+	}
+
+	function normalizeProductIdentifier(value) {
+		const normalizedValue = normalizePhoneValue(value);
+		if (!normalizedValue) return '';
+
+		try {
+			const url = new URL(normalizedValue, window.location.origin);
+			return stripSallaLocalePrefix(url.pathname);
+		} catch (err) {
+			const valueWithoutHash = normalizedValue.split('#', 1)[0];
+			const valueWithoutQuery = valueWithoutHash.split('?', 1)[0];
+			return stripSallaLocalePrefix(valueWithoutQuery);
+		}
+	}
+
+	function normalizeSupportedProducts(value) {
+		if (!Array.isArray(value)) return [];
+
+		const supportedProducts = [];
+		const seen = new Set();
+		for (const product of value) {
+			const normalizedProduct = normalizeProductIdentifier(product);
+			if (!normalizedProduct || seen.has(normalizedProduct)) {
+				continue;
+			}
+			seen.add(normalizedProduct);
+			supportedProducts.push(normalizedProduct);
+		}
+		return supportedProducts;
+	}
+
 	function escapeHtml(value) {
 		const text = document.createElement('div');
 		text.textContent = normalizePhoneValue(value);
@@ -300,7 +376,7 @@
 		return '';
 	}
 
-	// Resolve the store reference used by the app-id resolver.
+	// Resolve the store reference used by the public app-config resolver.
 	function getStoreReference() {
 		const store = salla?.config?.get?.('store', null);
 		const candidates = [store?.id, salla?.config?.get?.('store.id', '')];
@@ -311,29 +387,98 @@
 		return '';
 	}
 
-	// Resolve Techrar app id using the store reference only.
-	async function resolveTechrarAppId(reference) {
-		const endpoint = normalizePhoneValue(CONFIG.resolveAppIdUrl);
-		if (!endpoint || !reference) return null;
+	function normalizeResolvedAppConfig(data) {
+		const appId =
+			data?.app_id === null || data?.app_id === undefined || data?.app_id === ''
+				? null
+				: data.app_id;
+		return {
+			appId,
+			productWhitelistingEnabled: normalizeBooleanValue(
+				data?.product_whitelisting_enabled,
+			),
+			supportedProducts: normalizeSupportedProducts(
+				data?.supported_products,
+			),
+		};
+	}
+
+	// Resolve Techrar app config using the store reference only.
+	async function resolveTechrarAppConfig(reference) {
+		const endpoint = normalizePhoneValue(CONFIG.resolveAppConfigUrl);
+		if (!endpoint || !reference) return cloneDefaultAppConfig();
 		const url = new URL(endpoint, window.location.origin);
 		url.searchParams.set('reference', reference);
 
 		const response = await fetch(url.toString(), { method: 'GET' });
 		if (!response.ok) {
-			throw new Error(`resolve-app-id failed (${response.status})`);
+			throw new Error(`resolve-app-config failed (${response.status})`);
 		}
 
 		const data = await response.json();
-		const appId = data?.app_id;
-		if (!appId) {
-			throw new Error('resolve-app-id missing app_id');
+		const appConfig = normalizeResolvedAppConfig(data);
+		if (!appConfig.appId) {
+			throw new Error('resolve-app-config missing app_id');
 		}
-		return appId;
+		return appConfig;
 	}
 
-	async function resolveCurrentTechrarAppId(reference = getStoreReference()) {
-		if (!reference) return null;
-		return resolveTechrarAppId(reference);
+	async function resolveCurrentTechrarAppConfig(reference = getStoreReference()) {
+		const normalizedReference = normalizePhoneValue(reference);
+		if (!normalizedReference) return cloneDefaultAppConfig();
+
+		if (
+			cachedAppConfigPromise &&
+			cachedAppConfigReference === normalizedReference
+		) {
+			return cachedAppConfigPromise;
+		}
+
+		cachedAppConfigReference = normalizedReference;
+		cachedAppConfigPromise = resolveTechrarAppConfig(normalizedReference).catch(
+			(err) => {
+				if (cachedAppConfigReference === normalizedReference) {
+					cachedAppConfigPromise = null;
+				}
+				throw err;
+			},
+		);
+		return cachedAppConfigPromise;
+	}
+
+	async function resolveCurrentTechrarAppConfigOrDefault(
+		reference = getStoreReference(),
+	) {
+		try {
+			return await resolveCurrentTechrarAppConfig(reference);
+		} catch (err) {
+			console.error(
+				'[Techrar Loop] Unable to resolve Techrar app config. Falling back to default cart behavior.',
+				err,
+			);
+			return cloneDefaultAppConfig();
+		}
+	}
+
+	function isRecurringSupportedForCartItem(item, supportedProductSet) {
+		if (!(supportedProductSet instanceof Set) || supportedProductSet.size === 0) {
+			return true;
+		}
+
+		const itemIdentifier = normalizeProductIdentifier(item?.url);
+		return !!itemIdentifier && supportedProductSet.has(itemIdentifier);
+	}
+
+	function isRecurringSupportedForCart(items, appConfig) {
+		if (!Array.isArray(items) || items.length === 0) return false;
+		if (!appConfig?.productWhitelistingEnabled) return true;
+
+		const supportedProductSet = new Set(appConfig.supportedProducts || []);
+		if (supportedProductSet.size === 0) return true;
+
+		return items.every((item) =>
+			isRecurringSupportedForCartItem(item, supportedProductSet),
+		);
 	}
 
 	function buildRecurringCouponCode(appId) {
@@ -342,7 +487,7 @@
 			: '';
 	}
 
-	// Build the destination URL for subscription management with app id and phone.
+	// Build the destination URL for subscription management with app config data.
 	function buildManageSubscriptionsUrl(appId, phone) {
 		const baseUrl = normalizePhoneValue(CONFIG.manageSubscriptionsBaseUrl);
 		if (!baseUrl || !phone || !appId) return '';
@@ -763,32 +908,33 @@
 		// Mount a spinner while deciding whether to show the recurring UI.
 		const loadingContainer = createLoadingContainer();
 		const detailsPromise = salla.cart.details();
+		const appConfigPromise = resolveCurrentTechrarAppConfigOrDefault();
 		const mounted = await mountContainer(loadingContainer);
 
 		if (!mounted) {
 			detailsPromise.catch(() => {});
+			appConfigPromise.catch(() => {});
 			return;
 		}
 
 		let shouldShowUI = false;
 		try {
-			// All the products in the cart should be supported.
-			const response = await detailsPromise;
+			const [response, appConfig] = await Promise.all([
+				detailsPromise,
+				appConfigPromise,
+			]);
 			const items = response?.data?.cart?.items || [];
 
 			if (items.length === 0) return;
+			if (!isRecurringSupportedForCart(items, appConfig)) {
+				console.info(
+					'[Techrar Loop] Recurring UI hidden because the cart contains unsupported products.',
+				);
+				return;
+			}
 
-			// for (const item of items) {
-			// 	if (!CONFIG.supportedProducts.includes(item.product_id)) {
-			// 		console.log(
-			// 			'[Techrar Loop] One or more products in the cart are not supported',
-			// 		);
-			// 		return;
-			// 	}
-			// }
-
-				renderRecurringUI(loadingContainer, items);
-				shouldShowUI = true;
+			renderRecurringUI(loadingContainer, items);
+			shouldShowUI = true;
 		} catch (err) {
 			console.error('[Techrar Loop] Failed to evaluate cart state', err);
 		} finally {
@@ -828,7 +974,7 @@
 		return container;
 	}
 
-	// Lightweight loading placeholder shown while resolving app id.
+	// Lightweight loading placeholder shown while resolving app config.
 	function createOrdersLoadingContainer() {
 		const container = createOrdersActionContainer(
 			CONFIG.cssClasses.ordersLoading,
@@ -860,7 +1006,8 @@
 
 		let appId;
 		try {
-			appId = await resolveCurrentTechrarAppId(storeReference);
+			const appConfig = await resolveCurrentTechrarAppConfig(storeReference);
+			appId = appConfig.appId;
 		} catch (err) {
 			await waitForMinimumDuration(
 				loadingStartedAt,
@@ -1267,7 +1414,7 @@
 		const applyRecurringCoupon = () =>
 			runCouponAction(
 				async () => {
-					const appId = await resolveCurrentTechrarAppId();
+					const { appId } = await resolveCurrentTechrarAppConfig();
 					const coupon = buildRecurringCouponCode(appId);
 					if (!coupon) {
 						throw new Error('Techrar coupon unavailable');
