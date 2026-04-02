@@ -1,2 +1,2 @@
-https://cdn.jsdelivr.net/gh/techrar-co/salla-assets@0.1/dist/salla/current.js
+https://cdn.jsdelivr.net/gh/techrar-co/salla-assets@0.2/dist/salla/current.js
 https://cdn.jsdelivr.net/gh/techrar-co/salla-assets@latest/dist/salla/current.js
